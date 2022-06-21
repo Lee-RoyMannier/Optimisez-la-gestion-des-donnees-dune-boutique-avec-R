@@ -1,0 +1,192 @@
+---
+title: <center><b>Optimisation de la gestion des données<b></center>
+output: html_document
+params:
+  date : "18/03/22"
+  author: Lee-Roy Mannier
+---
+
+<center>![](https://user.oc-static.com/upload/2020/11/23/16061348800222_Capture%20d%E2%80%99e%CC%81cran%202020-11-23%20a%CC%80%2013.33.23.png){width=30%}
+</center>
+
+<hr>
+
+<h4>Data analyst chez Bottleneck, marchand de vin prestigieux, mes missions ont
+  été de rapprocher 2 exports de fichiers excel, d'obtenir le chiffre d'affaires
+  par produit ainsi que le total du chiffre d'affaires réalisé en ligne et
+  de détecter d'éventuelles valeurs aberrantes.
+</h4>
+
+### Les exports fournit sont:
+<ol>
+  <li>Un fichier nommé ERP contenant les références produit, leurs prix ect</li>
+  <li>Un fichier nommé web contenant les informations des produits commercialisés en ligne</li>
+  <li>Un fichier nommé liaison permettant de faire la liaison entre les 2 autres fichiers</li>
+</ol>
+
+```{r}
+  library("readxl")
+  library("dplyr")
+  library("ggplot2")
+  setwd("C:/Users/Mannier/Desktop/p5_oc")
+```
+
+### Fonction d'exploration des données
+
+```{r}
+  exploration <- function(tableau){
+  #' Pour permettre de travailler sur des données, il est essentielle de les 
+  #' connaitres, de les comprendres.
+  #' Pour cela une étape essentiel est l'exploration des données
+  #' @param tableau variable de type data frame
+  print("Dimension du tableau")
+  print(dim(tableau))
+  print("Review du tableau")
+  print(summary(tableau))
+  print("Colonnes du tableau: ")
+  print(colnames(tableau))
+  print("Affichage des 6 premières lignes")
+  colonnes <- colnames(tableau)[1]
+  tableau_sort <- tableau[order(tableau$sku), ]
+  print(head(tableau_sort))
+}
+```
+
+### Chargement des fichiers
+```{r}
+  # Chargement de nos données
+  web_info <- as.data.frame(read_excel("web.xlsx"))
+  erp <- as.data.frame(read_excel("erp.xlsx"))
+  liaison <- as.data.frame(read_excel("liaison.xlsx"))
+```
+
+### Exploration
+```{r}
+  exploration(web_info)
+```
+
+<h4>On observe une duplication de nos index, cela est dù au fait que nos produit sont dupliquer 2 fois, 1 fois pour distinguer l'analyse du produit et une 2ème fois pour l'emballage du produit, tel que l'image ect</h4>
+
+```{r}
+  #' Filtrage du tableau pour obtenir seulement les produits
+  product_web <- filter(.data=web_info, post_type=="product")
+  
+  # Renommage de la colonne sku en id_web
+  names(product_web)[names(product_web) == "sku"] <- "id_web"
+  erp["id_web"] <- liaison["id_web"]
+```
+
+### Chiffre d'affaire par produit vendu en ligne uniquement
+```{r}
+  # Maintenant que la colonne id_web est présente dans notre tableau erp, elle 
+  # servira de clé étrangère pour la jointure du tableau erp avec product_web
+  ensemble_produits <- merge(erp, product_web, by="id_web")
+  
+  ensemble_produits <- ensemble_produits[!is.na(ensemble_produits["id_web"]),]
+  #transform(ensemble_produits, price=as.numeric(price))
+  #transform(ensemble_produits, stock_quantity=as.numeric(stock_quantity))
+  
+  ensemble_voulu <- ensemble_produits[,c("id_web","post_name","price",
+                                                 "total_sales", "onsale_web")]
+  ensemble_voulu <- ensemble_voulu[!duplicated(ensemble_voulu["post_name"]),]
+  
+  # Calcule du CA total par produit
+  ensemble_voulu <- mutate(.data=ensemble_voulu,
+                          total_sales_product = price * total_sales)
+  head(ensemble_voulu[,c("post_name","total_sales_product")][
+    order(ensemble_voulu$total_sales_product, decreasing = TRUE),])
+```
+
+### Chiffre d'affaire par produit vendu en ligne uniquement
+```{r}
+  # Filtrage pour obtenir seulement les produits vendu en ligne
+  sales_web_products <- filter(.data=ensemble_voulu, onsale_web==1)
+  sales_web_products <- sum(sales_web_products["total_sales_product"])
+  cat("CA total par produit en ligne",sales_web_products,"€")
+```
+
+### Vérification de probable valeurs aberantes
+```{r}
+  detectoutliers <- function(data){
+    #' Une étape importante lors de la manipulation des données est de savoir
+    #' quand une donnée est érronnés, incorrecte ou mal saisie. 
+    #' Dans notre cas, nos données concernes des ventes de produits, 
+    #' par conséquent, on travaille avec des valeur, prix, nombre de ventes ect.
+    #' @param data ensemble de données de type integer ou float
+    zscore_product = c()
+    mean_price = mean(data)
+    sd_price = sd(data)
+    
+    for (product_price in (data)){
+      model_zscore = 2
+      zscore = (product_price - mean_price) / sd_price
+      if (abs(zscore) > model_zscore){
+        zscore_product <- append(zscore_product, product_price)
+      }
+    }
+    return(zscore_product)
+  }
+
+  outliers <- detectoutliers(ensemble_produits$price)
+  cat("Nous observons",length(outliers),"valeurs probablement abérante")
+```
+```{r}
+  ensemble_produits$Colour <- "black"
+  ensemble_produits$Colour[ensemble_produits$price %in% outliers] <- "red"
+  ensemble_produits$Colour[!ensemble_produits$price %in% outliers] <- "black"
+  
+  outliers_product <- select(
+    .data = ensemble_produits, 
+    post_title,
+    price,
+    total_sales)
+  outliers_product <- filter(.data=outliers_product, price %in% outliers) 
+  outliers_product
+```
+```{r}
+  # Affichage des outliers sous forme de scatter plot
+  plot(ensemble_produits$total_sales,ensemble_produits$price, 
+       main="Detection des outliers",
+       ylab="Prix",
+       xlab="nombre de vente",
+       col=ensemble_produits$Colour)
+  
+  # Affichage des outliers sous forme de boxplot
+  ggplot(ensemble_produits, aes(x=total_sales,y=price)) + 
+    geom_boxplot(fill='#5975a4') + theme_classic()
+```
+
+### Détection des valeurs abérantes avec la méthodes des quartiles
+```{r}
+  quartile = quantile(ensemble_produits$price,c(.25,.75))
+  iqr = quartile[2] - quartile[1]
+  print(paste("Quartile 1: " , quartile[1]))
+  print(paste("Quartile 3: " , quartile[2]))
+  print(paste("InterQuartile: " , iqr))
+  
+  # Valeurs limites via la méthode des quartiles
+  lower = quartile - (1.5 * iqr)
+  upper = quartile[2] + (1.5 * iqr)
+  print(paste("Lower: " , lower))
+  print(paste("Upper: " , upper))
+  
+  # affichage des prix outliers avec les produits correspondant
+  result = ensemble_produits[,c("post_title","price", "total_sales")][
+    (ensemble_produits['price'] > upper) | 
+                               (ensemble_produits['price'] < lower),]
+  result
+  
+  price_vector_outliers = as.vector(result$price)
+  ensemble_produits$Colour[ensemble_produits$price %in% 
+                             price_vector_outliers] <- "red"
+  ensemble_produits$Colour[!ensemble_produits$price %in% 
+                             price_vector_outliers] <- "black"
+  
+  
+  plot(ensemble_produits$total_sales,ensemble_produits$price, 
+       main="Detection des outliers",
+       ylab="Prix",
+       xlab="nombre de vente",
+       col=ensemble_produits$Colour)
+```
+
